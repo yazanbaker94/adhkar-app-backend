@@ -1,0 +1,15 @@
+{
+  "services": [
+    {
+      "name": "ffmpeg-server",
+      "buildCommand": "npm install",
+      "startCommand": "node server.js",
+      "envs": [
+        {
+          "key": "PORT",
+          "value": "3000"
+        }
+      ]
+    }
+  ]
+}
