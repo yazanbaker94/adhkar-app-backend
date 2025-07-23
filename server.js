@@ -8,6 +8,7 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const { createCanvas, registerFont } = require('canvas');
 
+
 // Register fonts with their correct internal names
 try {
   const fontFiles = [
@@ -52,11 +53,49 @@ try {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Middleware - Configure CORS to allow your frontend domain
+app.use(cors({
+  origin: [
+    'https://sakinahtime.com',
+    'https://www.sakinahtime.com',
+    'http://localhost:3000',
+    'http://localhost:8080',
+    'http://127.0.0.1:3000'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+}));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static('.'));
 app.use('/previews', express.static(path.join(__dirname, 'previews')));
+
+// Add request logging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path} from ${req.get('origin') || 'unknown'}`);
+  next();
+});
+
+// Add error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    success: false, 
+    error: 'Internal server error',
+    message: err.message 
+  });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage()
+  });
+});
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -753,7 +792,7 @@ app.post('/api/preview-video', async (req, res) => {
     res.json({
       success: true,
       previewId: previewId,
-      previewUrl: `/previews/${previewId}.mp4`,
+      previewUrl: `https://adhkar-app-backend.fly.dev/previews/${previewId}.mp4`,
       duration: previewDuration
     });
     
@@ -775,7 +814,7 @@ app.get('/api/backgrounds', (req, res) => {
       type: 'video',
       filename: f,
       displayName: f.replace(/\.[^.]+$/, '').replace(/_/g, ' '),
-      thumbnailUrl: `http://localhost:3000/api/thumbnail/${f}`
+      thumbnailUrl: `https://adhkar-app-backend.fly.dev/api/thumbnail/${f}`
     }));
   }
 
