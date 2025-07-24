@@ -792,7 +792,7 @@ app.post('/api/preview-video', async (req, res) => {
     res.json({
       success: true,
       previewId: previewId,
-      previewUrl: `https://adhkar-app-backend.fly.dev/previews/${previewId}.mp4`,
+      previewUrl: `https://adkar.zeabur.app/previews/${previewId}.mp4`,
       duration: previewDuration
     });
     
@@ -814,7 +814,7 @@ app.get('/api/backgrounds', (req, res) => {
       type: 'video',
       filename: f,
       displayName: f.replace(/\.[^.]+$/, '').replace(/_/g, ' '),
-      thumbnailUrl: `https://adhkar-app-backend.fly.dev/api/thumbnail/${f}`
+      thumbnailUrl: `https://adkar.zeabur.app/api/thumbnail/${f}`
     }));
   }
 
