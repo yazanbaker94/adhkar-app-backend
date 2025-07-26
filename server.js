@@ -165,643 +165,220 @@ app.get('/api/fonts', (req, res) => {
 });
 
 // Generate live preview video (short version for real-time preview)
+// FINAL PREVIEW CODE - Replace your entire /api/preview-video route with this
+
+// FINAL PREVIEW CODE - Replace your entire /api/preview-video route with this
+
 app.post('/api/preview-video', async (req, res) => {
   try {
-    console.log('Generating live preview...');
-    
-    const {
-      surah, ayah, ayahTo, reciter, backgroundType, backgroundFilename,
-      textColor, fontSize, fontFamily, orientation
-    } = req.body;
+      console.log('Generating live preview...');
 
-    console.log('Preview request body:', req.body);
+      const {
+          surah, ayah, ayahTo, textColor, fontSize, fontFamily, orientation, backgroundFilename
+      } = req.body;
 
-    // Validate required parameters
-    if (!surah || !ayah || !backgroundFilename) {
-      console.error('Missing required parameters:', { surah, ayah, backgroundFilename });
-      return res.status(400).json({ 
-        error: 'Missing required parameters: surah, ayah, and backgroundFilename are required' 
-      });
-    }
+      // --- 1. Validation and Setup ---
+      if (!surah || !ayah || !backgroundFilename) {
+          return res.status(400).json({ error: 'Missing required parameters' });
+      }
+      const surahNum = parseInt(surah);
+      const ayahNum = parseInt(ayah);
+      if (isNaN(surahNum) || isNaN(ayahNum)) {
+          return res.status(400).json({ error: 'Invalid surah or ayah numbers' });
+      }
 
-    const surahNum = parseInt(surah);
-    const ayahNum = parseInt(ayah);
+      const previewId = uuidv4();
+      const previewDuration = 3;
+      const videoWidth = orientation === 'portrait' ? 1080 : orientation === 'square' ? 1080 : 1920;
+      const videoHeight = orientation === 'portrait' ? 1920 : orientation === 'square' ? 1080 : 1080;
+      const maxTextWidth = Math.floor(videoWidth * 0.85);
+      const textColorValue = textColor || '#ffffff';
+      const baseFontSize = fontSize || Math.floor(videoHeight * 0.045);
 
-    if (isNaN(surahNum) || isNaN(ayahNum) || surahNum < 1 || ayahNum < 1) {
-      console.error('Invalid surah or ayah numbers:', { surah: surahNum, ayah: ayahNum });
-      return res.status(400).json({ 
-        error: 'Invalid surah or ayah numbers' 
-      });
-    }
+      const fontMapping = {
+          'Al Mushaf': 'Al Majeed Quranic Font',
+          'Uthmanic Hafs': 'KFGQPC HAFS Uthmanic Script'
+      };
+      const selectedFont = fontMapping[fontFamily] || fontFamily;
 
-    // Create a short preview video (3-5 seconds max)
-    const previewId = uuidv4();
-    const previewDuration = 3; // 3 seconds for quick preview
-    
-    // Use same logic as main video generation but shorter
-    const videoWidth = orientation === 'portrait' ? 1080 : orientation === 'square' ? 1080 : 1920;
-    const videoHeight = orientation === 'portrait' ? 1920 : orientation === 'square' ? 1080 : 1080;
-    
-    const fontMapping = {
-      'Al Mushaf': 'Al Majeed Quranic Font',
-      'Uthmanic Hafs': 'KFGQPC HAFS Uthmanic Script'
-    };
-    
-      let selectedFont = fontMapping[fontFamily] || fontFamily;
-  // Scale font size based on video height for better readability
-  const baseFontSize = fontSize || Math.floor(videoHeight * 0.045); // 4.5% of video height
-  const textColorValue = textColor || '#ffffff';
-    
-    // Test and detect working font for Hafs in preview at actual font size
-    if (fontFamily === 'Uthmanic Hafs') {
-      console.log('🔍 Preview: Testing Hafs font variations at actual size...');
-      const testCanvas = createCanvas(100, 50);
-      const testCtx = testCanvas.getContext('2d');
-      const testText = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ';
+      // --- 2. Fetch and Prepare Text ---
+      const quranData = JSON.parse(fs.readFileSync('./quran-uthmani.json', 'utf8'));
+      const translationData = JSON.parse(fs.readFileSync('./en.sahih.json', 'utf8'));
+
+      const startVerse = parseInt(ayahNum);
+      const endVerse = ayahTo ? parseInt(ayahTo) : startVerse;
+      let arabicText = '';
+      let translationText = '';
+
+      for (let i = startVerse; i <= endVerse; i++) {
+          const verse = quranData.data.surahs[surahNum - 1].ayahs[i - 1];
+          const translation = translationData.data.surahs[surahNum - 1].ayahs[i - 1];
+          if (arabicText) arabicText += ' ';
+          if (translationText) translationText += ' ';
+          arabicText += verse.text;
+          translationText += translation.text;
+      }
+      arabicText = arabicText.normalize('NFC').replace(/ٱ/g, 'ا');
+
+      // --- 3. Calculate Text Wrapping and Required Heights ---
+      const arabicFontSize = baseFontSize;
+      const translationFontSize = Math.floor(baseFontSize * 0.7);
+      const tempCtx = createCanvas(1, 1).getContext('2d');
       
-      // Test at actual font size, not 24px
-      testCtx.font = `${baseFontSize}px "Arial"`;
-      const arialBaseline = testCtx.measureText(testText).width;
-      console.log(`Preview Arial baseline at ${baseFontSize}px: ${arialBaseline}px`);
-      
-      const possibleNames = [
-        'KFGQPC HAFS Uthmanic Script',
-        'UthmanicHafs1Ver18',
-        'KFGQPC Hafs Uthmanic Script', 
-        'Traditional Arabic',
-        // Try the actual Windows font names
-        'KFGQPC Uthmanic Script HAFS',
-        'UthmanicHafs1 Ver18',
-        'Uthmanic Hafs Ver18'
-      ];
-      
-      let detectedWorkingFont = null;
-      possibleNames.forEach(name => {
-        try {
-          testCtx.font = `${baseFontSize}px "${name}"`;
-          const width = testCtx.measureText(testText).width;
-          const diff = Math.abs(width - arialBaseline);
-          console.log(`Preview font "${name}" at ${baseFontSize}px: width=${width}px, diff=${diff}px`);
-          
-          if (diff > 10 && !detectedWorkingFont) { // Use higher threshold for larger fonts
-            detectedWorkingFont = name;
-            console.log(`✓ Preview detected working Hafs font: ${name}`);
+      tempCtx.font = `${arabicFontSize}px "${selectedFont}"`;
+      const arabicWords = arabicText.split(' ');
+      const arabicWrappedLines = [];
+      let currentArabicLine = '';
+      for (const word of arabicWords) {
+          const testLine = currentArabicLine ? `${currentArabicLine} ${word}` : word;
+          if (tempCtx.measureText(testLine).width > maxTextWidth && currentArabicLine) {
+              arabicWrappedLines.push(currentArabicLine);
+              currentArabicLine = word;
+          } else {
+              currentArabicLine = testLine;
           }
-        } catch (e) {
-          console.log(`Preview font "${name}": failed - ${e.message}`);
-        }
+      }
+      arabicWrappedLines.push(currentArabicLine);
+      
+      tempCtx.font = `${translationFontSize}px "Arial"`;
+      const translationWords = translationText.split(' ');
+      const translationWrappedLines = [];
+      let currentTranslationLine = '';
+      for (const word of translationWords) {
+          const testLine = currentTranslationLine ? `${currentTranslationLine} ${word}` : word;
+          if (tempCtx.measureText(testLine).width > maxTextWidth && currentTranslationLine) {
+              translationWrappedLines.push(currentTranslationLine);
+              currentTranslationLine = word;
+          } else {
+              currentTranslationLine = testLine;
+          }
+      }
+      translationWrappedLines.push(currentTranslationLine);
+
+      const arabicBlockHeight = arabicFontSize * 1.3 * arabicWrappedLines.length;
+      const translationBlockHeight = translationFontSize * 1.3 * translationWrappedLines.length;
+
+      // --- 4. Create Dynamically-Sized Text Canvases ---
+      const tempArabicTextPath = path.join(__dirname, 'temp', `${previewId}_arabic.png`);
+      const arabicCanvas = createCanvas(videoWidth, arabicBlockHeight);
+      const arabicCtx = arabicCanvas.getContext('2d');
+      arabicCtx.font = `${arabicFontSize}px "${selectedFont}"`;
+      arabicCtx.fillStyle = textColorValue;
+      arabicCtx.textAlign = 'center';
+      arabicCtx.textBaseline = 'middle';
+      arabicWrappedLines.forEach((line, index) => {
+          const y = (index * arabicFontSize * 1.3) + (arabicFontSize * 1.3 / 2);
+          arabicCtx.fillText(line, videoWidth / 2, y);
       });
-      
-      if (detectedWorkingFont) {
-        selectedFont = detectedWorkingFont;
-        console.log(`🔄 Preview using detected font: ${detectedWorkingFont}`);
-      } else {
-        // If no font detected, try system Arabic fonts directly
-        console.log('🔄 No Hafs font detected, trying system Arabic fonts...');
-        const systemArabicFonts = ['Traditional Arabic', 'Arabic Typesetting', 'Tahoma'];
-        for (const sysFont of systemArabicFonts) {
-          testCtx.font = `${baseFontSize}px "${sysFont}"`;
-          const sysWidth = testCtx.measureText(testText).width;
-          const sysDiff = Math.abs(sysWidth - arialBaseline);
-          console.log(`System font "${sysFont}" at ${baseFontSize}px: width=${sysWidth}px, diff=${sysDiff}px`);
-          if (sysDiff > 5) {
-            selectedFont = sysFont;
-            console.log(`✓ Using system Arabic font: ${sysFont}`);
-            break;
-          }
-        }
-      }
-    }
-    
-    // Calculate responsive dimensions for preview (same as main generation)
-    const maxTextWidth = Math.floor(videoWidth * 0.85);
-    const arabicTextHeight = Math.floor(videoHeight * 0.2);
-    const translationTextHeight = Math.floor(videoHeight * 0.15);
-    
-    // Get verse text (same structure as main generation)
-    const quranData = JSON.parse(fs.readFileSync('./quran-uthmani.json', 'utf8'));
-    const translationData = JSON.parse(fs.readFileSync('./en.sahih.json', 'utf8'));
-    
-    console.log('Loading verse data for surah:', surahNum, 'ayah:', ayahNum);
-    
-    // Access data correctly - check if it's wrapped in .data or direct
-    const quranSurahs = quranData.data ? quranData.data.surahs : quranData.surahs;
-    const translationSurahs = translationData.data ? translationData.data.surahs : translationData.surahs;
-    
-    if (!quranSurahs || !translationSurahs) {
-      throw new Error('Could not access Quran data structure');
-    }
-    
-    if (surahNum > quranSurahs.length || ayahNum > quranSurahs[surahNum - 1].ayahs.length) {
-      throw new Error(`Invalid verse reference: surah ${surahNum}, ayah ${ayahNum}`);
-    }
-    
-    const selectedSurah = quranSurahs[surahNum - 1];
-    // Handle verse ranges for preview
-    const startVerse = parseInt(ayahNum);
-    const endVerse = ayahTo ? parseInt(ayahTo) : startVerse;
-    
-    let arabicText = '';
-    let translationText = '';
-    
-    for (let i = startVerse; i <= endVerse; i++) {
-      const selectedAyah = selectedSurah.ayahs[i - 1];
-      const selectedTranslation = translationSurahs[surahNum - 1].ayahs[i - 1];
-      
-      if (!selectedAyah || !selectedTranslation) {
-        throw new Error(`Could not find verse data for surah ${surahNum}, ayah ${i}`);
-      }
-      
-      if (arabicText) arabicText += ' ';
-      if (translationText) translationText += ' ';
-      
-      arabicText += selectedAyah.text;
-      translationText += selectedTranslation.text;
-    }
-    
-    console.log('🔍 Original Arabic text from Quran data:');
-    console.log(`"${arabicText}"`);
-    console.log('Text length:', arabicText.length);
-    console.log('First 10 characters:', arabicText.substring(0, 10).split('').map(c => `${c} (U+${c.charCodeAt(0).toString(16).toUpperCase()})`));
-    
-    // Fix Unicode normalization issues for Arabic text
-    console.log('🔧 Applying Unicode normalization...');
-    
-    // Normalize Unicode composition (NFC)
-    arabicText = arabicText.normalize('NFC');
-    
-    // Fix specific Arabic character issues - enhanced for diacritics
-    arabicText = arabicText
-      // Fix the exact pattern we see in logs: ء + FATHA + ا → أ
-      .replace(/\u0621\u064E\u0627/g, '\u0623') // ء َ ا → أ (exact pattern from debugging)
-      // Fix other hamza + diacritics + alif patterns
-      .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0627/g, '\u0623') // hamza + any diacritics + alif → hamza on alif
-      .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0625/g, '\u0625') // hamza + any diacritics + hamza-under-alif
-      .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0622/g, '\u0622') // hamza + any diacritics + alif-madda
-      // Fix simple cases without diacritics
-      .replace(/ءا/g, 'أ')
-      .replace(/\u0621\u0627/g, '\u0623') // hamza + alif → hamza on alif
-      .replace(/\u0621\u0623/g, '\u0623') // hamza + hamza-on-alif → hamza on alif
-      .replace(/\u0621\u0625/g, '\u0625') // hamza + hamza-under-alif → hamza under alif
-      .replace(/\u0621\u0622/g, '\u0622') // hamza + alif-madda → alif madda
-      .replace(/ٱلْءَاخِرَةِ/g, 'الْآخِرَةِ') // Fix "الآخرة" rendering issue
-      .replace(/ءَاخِرَةِ/g, 'آخِرَةِ') // Alternative pattern for "الآخرة"
-      .replace(/وَبِٱلْءَاخِرَةِ/g, 'وَبِالْآخِرَةِ') // Fix "وبالآخرة" specific issue
-      .replace(/بِٱلْءَاخِرَةِ/g, 'بِالْآخِرَةِ') // Fix "بالآخرة" pattern
-      .replace(/ٱلْءَ/g, 'الْآ'); // General fix for hamza-alif in definite articles
-    
-    console.log('🔧 After normalization:');
-    console.log(`"${arabicText}"`);
-    console.log('New length:', arabicText.length);
-    
-    // Check for problematic characters
-    const problematicChars = arabicText.match(/[\uFFFD\u0621]/g);
-    if (problematicChars) {
-      console.log('⚠️ Found problematic characters:', problematicChars.map(c => `${c} (U+${c.charCodeAt(0).toString(16).toUpperCase()})`));
-    } else {
-      console.log('✅ No problematic characters found');
-    }
-    
-    // Function to calculate optimal font size and handle text wrapping (same as main generation)
-    function calculateOptimalTextSize(text, fontFamily, baseSize, maxWidth, maxHeight) {
-      const tempCanvas = createCanvas(100, 100);
-      const tempCtx = tempCanvas.getContext('2d');
-      
-      let optimalSize = baseSize;
-      let lines = [text];
-      
-      for (let size = baseSize; size >= 16; size -= 2) {
-        tempCtx.font = `${size}px "${fontFamily}"`;
-        
-        const singleLineWidth = tempCtx.measureText(text).width;
-        const lineHeight = size * 1.3;
-        
-        if (singleLineWidth <= maxWidth && lineHeight <= maxHeight) {
-          optimalSize = size;
-          lines = [text];
-          break;
-        }
-        
-        // Check if text contains Arabic characters
-        const hasArabic = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
-        
-        if (hasArabic) {
-          // For Arabic text, AVOID text wrapping to prevent corruption
-          // Just continue to smaller font sizes
-          console.log(`🚫 Arabic text detected, skipping wrapping at size ${size}px`);
-          continue;
-        } else {
-          // For non-Arabic text, use normal wrapping
-          const words = text.split(' ');
-          if (words.length > 1) {
-            const wrappedLines = [];
-            let currentLine = '';
-            
-            for (const word of words) {
-              const testLine = currentLine ? `${currentLine} ${word}` : word;
-              const testWidth = tempCtx.measureText(testLine).width;
-              
-              if (testWidth <= maxWidth) {
-                currentLine = testLine;
-              } else {
-                if (currentLine) wrappedLines.push(currentLine);
-                currentLine = word;
-              }
-            }
-            if (currentLine) wrappedLines.push(currentLine);
-            
-            const totalHeight = wrappedLines.length * lineHeight;
-            if (totalHeight <= maxHeight) {
-              optimalSize = size;
-              lines = wrappedLines;
-              break;
-            }
-          }
-        }
-      }
-      
-      return { fontSize: optimalSize, lines: lines };
-    }
-    
-    // Use consistent font sizing (same as final video) instead of calculateOptimalTextSize
-    const arabicTextData = {
-      fontSize: baseFontSize, // Use full base font size like final video
-      lines: [arabicText] // Placeholder, will be replaced with proper wrapping
-    };
-    const translationTextData = calculateOptimalTextSize(translationText, 'Arial', Math.floor(baseFontSize * 0.7), maxTextWidth, translationTextHeight);
-    
-    // Create text images with responsive sizing
-    const tempArabicTextPath = path.join(__dirname, 'temp', `${previewId}_preview_arabic.png`);
-    const tempTranslationTextPath = path.join(__dirname, 'temp', `${previewId}_preview_translation.png`);
-    
-    // Generate Arabic text image with unified background
-    const arabicCanvas = createCanvas(videoWidth, arabicTextHeight);
-    const arabicCtx = arabicCanvas.getContext('2d');
-    
-    // Set initial font and test if it works (same logic as main generation)
-    let finalFont = selectedFont;
-    arabicCtx.font = `${arabicTextData.fontSize}px "${selectedFont}"`;
-    
-    // Test if font is working
-    const testCtx = createCanvas(200, 100).getContext('2d');
-    const testText = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ';
-    
-    testCtx.font = `${arabicTextData.fontSize}px "Arial"`;
-    const arialWidth = testCtx.measureText(testText).width;
-    
-    testCtx.font = `${arabicTextData.fontSize}px "${selectedFont}"`;
-    const customFontWidth = testCtx.measureText(testText).width;
-    const customFontDifference = Math.abs(customFontWidth - arialWidth);
-    
-    console.log(`Preview font test - Original: "${selectedFont}", width=${customFontWidth}px, diff=${customFontDifference}px`);
-    
-    if (customFontDifference > 10) {
-      console.log(`✓ Preview: Original font "${selectedFont}" is working fine (diff=${customFontDifference}px)`);
-      finalFont = selectedFont;
-    } else if (fontFamily === 'Uthmanic Hafs') {
-      console.log('🔍 Preview: Original Hafs font not working, trying alternatives...');
-      // Try alternative font names for Hafs
-      const alternativeNames = [
-        'UthmanicHafs1Ver18', 
-        'KFGQPC Hafs Uthmanic Script', 
-        'Traditional Arabic',
-        'KFGQPC Uthmanic Script HAFS',
-        'UthmanicHafs1 Ver18',
-        'Uthmanic Hafs Ver18'
-      ];
-      
-      for (const altName of alternativeNames) {
-        testCtx.font = `${arabicTextData.fontSize}px "${altName}"`;
-        const altWidth = testCtx.measureText(testText).width;
-        const altDifference = Math.abs(altWidth - arialWidth);
-        
-        console.log(`Preview testing "${altName}": width=${altWidth}px, diff=${altDifference}px`);
-        
-        if (altDifference > 10) {
-          finalFont = altName;
-          console.log(`✓ Preview using working font: ${altName}`);
-          break;
-        }
-      }
-    } else {
-      console.log(`⚠ Preview: Font "${selectedFont}" not working well (diff=${customFontDifference}px), keeping it anyway`);
-    }
-    
-    arabicCtx.font = `${arabicTextData.fontSize}px "${finalFont}"`;
-    console.log(`🎨 Preview: Final Canvas font set to: ${arabicCtx.font}`);
-    
-    // Double-check the font is actually working by measuring text again
-    const finalTestWidth = arabicCtx.measureText('بِسْمِ اللَّهِ').width;
-    console.log(`🎨 Preview: Final text width with "${finalFont}": ${finalTestWidth}px`);
-    
-    // Test specific problematic text
-    const problemText = 'وَبِٱلْءَاخِرَةِ';
-    const problemWidth = arabicCtx.measureText(problemText).width;
-    console.log(`🔍 Preview: Problem text "${problemText}" width: ${problemWidth}px`);
-    
-    // Try with Arial to compare
-    const currentFont = arabicCtx.font;
-    arabicCtx.font = `${arabicTextData.fontSize}px "Arial"`;
-    const arialProblemWidth = arabicCtx.measureText(problemText).width;
-    console.log(`🔍 Preview: Same text with Arial width: ${arialProblemWidth}px`);
-    
-    // Reset to final font
-    arabicCtx.font = currentFont;
-    
-    // Pre-calculate Arabic text wrapping for preview (same as final video) - MOVED HERE
-    const previewArabicCtxTemp = createCanvas(100, 100).getContext('2d');
-    previewArabicCtxTemp.font = `${arabicTextData.fontSize}px "${finalFont}"`;
-    
-    console.log(`🔧 Preview: Wrapping calculation using font: ${arabicTextData.fontSize}px "${finalFont}"`);
-    console.log(`🔧 Preview: Max text width: ${maxTextWidth}px`);
-    console.log(`🔧 Preview: Full Arabic text: "${arabicText.substring(0, 100)}..."`);
-    
-    const previewArabicWords = arabicText.split(' ');
-    const previewArabicWrappedLines = [];
-    let previewCurrentArabicLine = '';
-    
-    for (const word of previewArabicWords) {
-      const testLine = previewCurrentArabicLine ? `${previewCurrentArabicLine} ${word}` : word;
-      const testWidth = previewArabicCtxTemp.measureText(testLine).width;
-      
-      if (testWidth <= maxTextWidth || !previewCurrentArabicLine) {
-        previewCurrentArabicLine = testLine;
-      } else {
-        console.log(`🔧 Preview: Line break - "${previewCurrentArabicLine}" (width: ${previewArabicCtxTemp.measureText(previewCurrentArabicLine).width}px)`);
-        previewArabicWrappedLines.push(previewCurrentArabicLine);
-        previewCurrentArabicLine = word;
-      }
-    }
-    if (previewCurrentArabicLine) {
-      console.log(`🔧 Preview: Final line - "${previewCurrentArabicLine}" (width: ${previewArabicCtxTemp.measureText(previewCurrentArabicLine).width}px)`);
-      previewArabicWrappedLines.push(previewCurrentArabicLine);
-    }
-    
-    console.log(`📏 Preview: Arabic text will wrap to ${previewArabicWrappedLines.length} lines`);
-    console.log(`📏 Preview: Using font size ${arabicTextData.fontSize}px for Arabic text`);
-    console.log(`📏 Preview: arabicTextData.lines has ${arabicTextData.lines?.length || 0} lines`);
-    console.log(`📏 Preview: previewArabicWrappedLines has ${previewArabicWrappedLines.length} lines`);
-    
-    // Calculate text positioning using pre-calculated wrapped lines (match final video)
-    const lineHeight = arabicTextData.fontSize * 1.3;
-    const totalTextHeight = previewArabicWrappedLines.length * lineHeight;
-    const startY = (arabicTextHeight - totalTextHeight) / 2 + lineHeight / 2;
-    
-    // Set text styles
-    arabicCtx.fillStyle = textColorValue;
-    arabicCtx.strokeStyle = '#000000';
-    arabicCtx.lineWidth = 3;
-    arabicCtx.textAlign = 'center';
-    arabicCtx.textBaseline = 'middle';
-    
-    console.log('🎨 Preview - Drawing Arabic text lines (using wrapped lines):');
-    console.log(`🎨 Preview - Total lines to draw: ${previewArabicWrappedLines.length}`);
-    console.log(`🎨 Preview - Line height: ${lineHeight}px, Start Y: ${startY}px`);
-    
-    previewArabicWrappedLines.forEach((line, index) => {
-      const y = startY + (index * lineHeight);
-      console.log(`Preview Line ${index + 1}: "${line.substring(0, 50)}..." at Y=${y}`);
-      
-      arabicCtx.strokeText(line, videoWidth / 2, y);
-      arabicCtx.fillText(line, videoWidth / 2, y);
-    });
-    
-    const arabicBuffer = arabicCanvas.toBuffer('image/png');
-    fs.writeFileSync(tempArabicTextPath, arabicBuffer);
-    
-    // Generate translation text image with multiple lines
-    const translationCanvas = createCanvas(videoWidth, translationTextHeight);
-    const translationCtx = translationCanvas.getContext('2d');
-    translationCtx.font = `${translationTextData.fontSize}px "Arial"`;
-    
-    // Calculate translation text positioning (no background - will be unified)
-    const translationLineHeight = translationTextData.fontSize * 1.3;
-    const totalTranslationHeight = translationTextData.lines.length * translationLineHeight;
-    const translationStartY = (translationTextHeight - totalTranslationHeight) / 2 + translationLineHeight / 2;
-    
-    // Set text styles
-    translationCtx.fillStyle = textColorValue;
-    translationCtx.strokeStyle = '#000000';
-    translationCtx.lineWidth = 2;
-    translationCtx.textAlign = 'center';
-    translationCtx.textBaseline = 'middle';
-    
-    translationTextData.lines.forEach((line, index) => {
-      const y = translationStartY + (index * translationLineHeight);
-      translationCtx.strokeText(line, videoWidth / 2, y);
-      translationCtx.fillText(line, videoWidth / 2, y);
-    });
-    
-    const translationBuffer = translationCanvas.toBuffer('image/png');
-    fs.writeFileSync(tempTranslationTextPath, translationBuffer);
-    
-    // Create unified background overlay for both texts
-    const unifiedOverlayCanvas = createCanvas(videoWidth, videoHeight);
-    const unifiedOverlayCtx = unifiedOverlayCanvas.getContext('2d');
-    
-    // Arabic text wrapping already calculated above - use those results
-    
-    // Text dimensions will be calculated below using final video logic
-    
-    // Background overlay dimensions - match final video exactly
-    const overlayPadding = 60; // Increased padding for better coverage
-    const overlayWidth = videoWidth * 0.9; // Slightly wider for better coverage
-    
-    // MATCH FINAL VIDEO EXACTLY - Use the same precise positioning as final video
-    // Calculate actual text dimensions based on wrapped lines (same as final video)
-    const arabicHeight = arabicTextData.fontSize * 1.3 * previewArabicWrappedLines.length;
-    const translationHeight = translationTextData.fontSize * 1.3 * translationTextData.lines.length;
-    const textGap = Math.floor(videoHeight * 0.02); // 2% of video height as gap
-    
-    // Use the EXACT same positioning calculation as final video
-    const extraGap = Math.floor(videoHeight * 0.05); // Additional 5% gap between texts
-    const arabicOffset = Math.floor(arabicHeight / 2) + extraGap; // Arabic above center
-    const translationOffset = Math.floor(translationHeight / 2) + extraGap; // Translation below center with gap
-    
-    // Calculate overlay position to match where text will actually be drawn (SAME AS FINAL VIDEO)
-    // The overlay should cover from top of Arabic to bottom of translation with proper padding
-    const arabicTopPosition = (videoHeight / 2) - arabicOffset - (arabicHeight / 2);
-    const translationBottomPosition = (videoHeight / 2) + translationOffset + (translationHeight / 2);
-    
-    const overlayTopY = arabicTopPosition - overlayPadding;
-    const overlayBottomY = translationBottomPosition + overlayPadding;
-    const overlayHeight = overlayBottomY - overlayTopY;
-    
-    console.log(`🔧 Preview: Using EXACT FINAL VIDEO positioning logic`);
-    console.log(`🔧 Preview: Arabic area: ${arabicTopPosition}px to ${arabicTopPosition + arabicHeight}px`);
-    console.log(`🔧 Preview: Translation area: ${translationBottomPosition - translationHeight}px to ${translationBottomPosition}px`);
-    console.log(`🔧 Preview: Arabic offset: ${arabicOffset}px, Translation offset: ${translationOffset}px`);
-    
-    const overlayX = (videoWidth - overlayWidth) / 2;
-    const overlayY = overlayTopY;
-    
-    console.log(`📏 Preview overlay positioning:`);
-    console.log(`📏 Video center: ${videoHeight / 2}px`);
-    console.log(`📏 Arabic positioning: top=${arabicTopPosition}px, height=${arabicHeight}px, offset=${arabicOffset}px`);
-    console.log(`📏 Translation positioning: bottom=${translationBottomPosition}px, height=${translationHeight}px, offset=${translationOffset}px`);
-    console.log(`📏 Overlay: ${overlayWidth}x${overlayHeight} at (${overlayX}, ${overlayY})`);
-    console.log(`📏 Overlay covers Y: ${overlayTopY} to ${overlayBottomY}`);
-    
-    // Draw smooth rounded background
-    unifiedOverlayCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    unifiedOverlayCtx.beginPath();
-    unifiedOverlayCtx.roundRect(overlayX, overlayY, overlayWidth, overlayHeight, 25);
-    unifiedOverlayCtx.fill();
-    
-    const tempUnifiedOverlayPath = path.join(__dirname, 'temp', `${previewId}_unified_overlay.png`);
-    const unifiedOverlayBuffer = unifiedOverlayCanvas.toBuffer('image/png');
-    fs.writeFileSync(tempUnifiedOverlayPath, unifiedOverlayBuffer);
-    
-    // Create watermark image for preview
-    const watermarkCanvas = createCanvas(videoWidth, videoHeight);
-    const watermarkCtx = watermarkCanvas.getContext('2d');
-    
-    // Set watermark properties - prominent top placement with better sizing
-    const websiteFontSize = Math.max(36, Math.floor(videoWidth * 0.045)); // Much larger and responsive
-    const surahFontSize = Math.max(26, Math.floor(videoWidth * 0.03)); // Larger surah name
-    
-    // Position at top center
-    const topPadding = Math.floor(videoHeight * 0.08); // 8% from top
-    const websiteY = topPadding;
-    const surahY = websiteY + websiteFontSize + 10; // 10px spacing between lines
-    
-    // Get surah name
-    const surahNamesEnglish = [
-      "Al-Fatihah", "Al-Baqarah", "Aal-E-Imran", "An-Nisa", "Al-Maidah", "Al-An'am", "Al-A'raf", "Al-Anfal", "At-Tawbah", "Yunus",
-      "Hud", "Yusuf", "Ar-Ra'd", "Ibrahim", "Al-Hijr", "An-Nahl", "Al-Isra", "Al-Kahf", "Maryam", "Taha",
-      "Al-Anbiya", "Al-Hajj", "Al-Mu'minun", "An-Nur", "Al-Furqan", "Ash-Shu'ara", "An-Naml", "Al-Qasas", "Al-Ankabut", "Ar-Rum",
-      "Luqman", "As-Sajdah", "Al-Ahzab", "Saba", "Fatir", "Ya-Sin", "As-Saffat", "Sad", "Az-Zumar", "Ghafir",
-      "Fussilat", "Ash-Shuraa", "Az-Zukhruf", "Ad-Dukhan", "Al-Jathiyah", "Al-Ahqaf", "Muhammad", "Al-Fath", "Al-Hujurat", "Qaf",
-      "Adh-Dhariyat", "At-Tur", "An-Najm", "Al-Qamar", "Ar-Rahman", "Al-Waqi'ah", "Al-Hadid", "Al-Mujadila", "Al-Hashr", "Al-Mumtahanah",
-      "As-Saff", "Al-Jumu'ah", "Al-Munafiqun", "At-Taghabun", "At-Talaq", "At-Tahrim", "Al-Mulk", "Al-Qalam", "Al-Haqqah", "Al-Ma'arij",
-      "Nuh", "Al-Jinn", "Al-Muzzammil", "Al-Muddaththir", "Al-Qiyamah", "Al-Insan", "Al-Mursalat", "An-Naba", "An-Nazi'at", "Abasa",
-      "At-Takwir", "Al-Infitar", "Al-Mutaffifin", "Al-Inshiqaq", "Al-Buruj", "At-Tariq", "Al-A'la", "Al-Ghashiyah", "Al-Fajr", "Al-Balad",
-      "Ash-Shams", "Al-Layl", "Ad-Duhaa", "Ash-Sharh", "At-Tin", "Al-Alaq", "Al-Qadr", "Al-Bayyinah", "Az-Zalzalah", "Al-Adiyat",
-      "Al-Qari'ah", "At-Takathur", "Al-Asr", "Al-Humazah", "Al-Fil", "Quraysh", "Al-Ma'un", "Al-Kawthar", "Al-Kafirun", "An-Nasr",
-      "Al-Masad", "Al-Ikhlas", "Al-Falaq", "An-Nas"
-    ];
-    
-    const surahName = surahNamesEnglish[surah - 1] || `Surah ${surah}`;
-    const surahWithVerse = `${surahName} - Verse ${ayah}`;
-    
-    // Style: Bold white text with dark outline for visibility
-    watermarkCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-    watermarkCtx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-    watermarkCtx.lineWidth = 2;
-    watermarkCtx.textAlign = 'center';
-    watermarkCtx.textBaseline = 'top';
-    
-    // Draw website name (extra bold and prominent with Impact font)
-    watermarkCtx.font = `900 ${websiteFontSize}px "Impact", "Arial Black", sans-serif`;
-    watermarkCtx.lineWidth = 4; // Even thicker outline for better visibility
-    watermarkCtx.strokeText('I made this on SakinahTimes.com', videoWidth / 2, websiteY);
-    watermarkCtx.fillText('I made this on SakinahTimes.com', videoWidth / 2, websiteY);
-    
-    // Reset line width for surah text
-    watermarkCtx.lineWidth = 3;
-    
-    // Draw surah name with verse number (also with Impact font)
-    watermarkCtx.font = `bold ${surahFontSize}px "Impact", "Arial Black", sans-serif`;
-    watermarkCtx.strokeText(surahWithVerse, videoWidth / 2, surahY);
-    watermarkCtx.fillText(surahWithVerse, videoWidth / 2, surahY);
-    
-    const tempWatermarkPath = path.join(__dirname, 'temp', `${previewId}_watermark.png`);
-    const watermarkBuffer = watermarkCanvas.toBuffer('image/png');
-    fs.writeFileSync(tempWatermarkPath, watermarkBuffer);
-    
-    // Generate quick preview video
-    const backgroundPath = path.join(__dirname, 'videos', backgroundFilename);
-    const previewOutputPath = path.join(__dirname, 'previews', `${previewId}.mp4`);
-    
-    // Ensure previews directory exists
-    fs.ensureDirSync(path.join(__dirname, 'previews'));
-    
-    // Use the EXACT same positioning as final video for FFmpeg command
-    const previewArabicTextOffset = arabicOffset; // Use same offset as final video
-    const previewTranslationTextOffset = translationOffset; // Use same offset as final video
+      fs.writeFileSync(tempArabicTextPath, arabicCanvas.toBuffer('image/png'));
 
-    console.log(`📏 Preview FFmpeg positioning (MATCHES FINAL VIDEO): Arabic offset=${previewArabicTextOffset}, Translation offset=${previewTranslationTextOffset}`);
+      const tempTranslationTextPath = path.join(__dirname, 'temp', `${previewId}_translation.png`);
+      const translationCanvas = createCanvas(videoWidth, translationBlockHeight);
+      const translationCtx = translationCanvas.getContext('2d');
+      translationCtx.font = `${translationFontSize}px "Arial"`;
+      translationCtx.fillStyle = textColorValue;
+      translationCtx.textAlign = 'center';
+      translationCtx.textBaseline = 'middle';
+      translationWrappedLines.forEach((line, index) => {
+          const y = (index * translationFontSize * 1.3) + (translationFontSize * 1.3 / 2);
+          translationCtx.fillText(line, videoWidth / 2, y);
+      });
+      fs.writeFileSync(tempTranslationTextPath, translationCanvas.toBuffer('image/png'));
+      
+      // --- 5. Calculate Final Positions & Create Overlays ---
+      const textGap = Math.floor(videoHeight * 0.03);
+      const totalContentHeight = arabicBlockHeight + textGap + translationBlockHeight;
+      
+      const arabicTopPosition = (videoHeight - totalContentHeight) / 2;
+      const translationTopPosition = arabicTopPosition + arabicBlockHeight + textGap;
 
-    const command = ffmpeg()
-      .input(backgroundPath)
-      .inputOptions(['-stream_loop', '-1', '-t', previewDuration.toString()])
-      .input(tempUnifiedOverlayPath)
-      .input(tempArabicTextPath)
-      .input(tempTranslationTextPath)
-      .input(tempWatermarkPath)
-      .complexFilter([
-        `[0:v]scale=${videoWidth}:${videoHeight}[scaled]`,
-        `[scaled][1:v]overlay=0:0[with_overlay]`,
-        `[with_overlay][2:v]overlay=(W-w)/2:(H-h)/2-${previewArabicTextOffset}[with_arabic]`,
-        `[with_arabic][3:v]overlay=(W-w)/2:(H-h)/2+${previewTranslationTextOffset}[with_translation]`,
-        `[with_translation][4:v]overlay=0:0[final]`
-      ])
-      .outputOptions([
-        '-map', '[final]',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast', // Fastest encoding for preview
-        '-crf', '28', // Lower quality for speed
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        '-an' // No audio for preview
-      ])
-      .output(previewOutputPath);
-    
-    await new Promise((resolve, reject) => {
-      command
-        .on('end', () => {
-          console.log('Preview video generated successfully');
-          // Clean up temp files
-          fs.unlinkSync(tempArabicTextPath);
-          fs.unlinkSync(tempTranslationTextPath);
-          fs.unlinkSync(tempUnifiedOverlayPath);
-          fs.unlinkSync(tempWatermarkPath);
-          resolve();
-        })
-        .on('error', (err) => {
-          console.error('Preview generation error:', err);
-          reject(err);
-        })
-        .run();
-    });
-    
-    // Clean up old preview files (keep only last 10)
-    setTimeout(() => {
-      try {
-        const previewsDir = path.join(__dirname, 'previews');
-        const files = fs.readdirSync(previewsDir).filter(f => f.endsWith('.mp4'));
-        if (files.length > 10) {
-          files
-            .map(f => ({ name: f, path: path.join(previewsDir, f), time: fs.statSync(path.join(previewsDir, f)).mtime }))
-            .sort((a, b) => b.time - a.time)
-            .slice(10) // Keep newest 10, remove the rest
-            .forEach(f => {
-              try {
-                fs.unlinkSync(f.path);
-                console.log('Cleaned up old preview:', f.name);
-              } catch (err) {
-                console.log('Could not delete preview file:', f.name);
-              }
-            });
-        }
-      } catch (err) {
-        console.log('Preview cleanup error:', err);
-      }
-    }, 1000);
+      const overlayPadding = Math.floor(videoHeight * 0.05);
+      const overlayX = (videoWidth * 0.05);
+      const overlayY = arabicTopPosition - overlayPadding;
+      const overlayWidth = videoWidth * 0.9;
+      const overlayHeight = totalContentHeight + (overlayPadding * 2);
+      
+      const unifiedOverlayCanvas = createCanvas(videoWidth, videoHeight);
+      const unifiedOverlayCtx = unifiedOverlayCanvas.getContext('2d');
+      unifiedOverlayCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      unifiedOverlayCtx.beginPath();
+      unifiedOverlayCtx.roundRect(overlayX, overlayY, overlayWidth, overlayHeight, 25);
+      unifiedOverlayCtx.fill();
+      const tempUnifiedOverlayPath = path.join(__dirname, 'temp', `${previewId}_overlay.png`);
+      fs.writeFileSync(tempUnifiedOverlayPath, unifiedOverlayCanvas.toBuffer('image/png'));
+      
+      // --- 5a. Create Modern Watermark (RESTORED) ---
+      const watermarkCanvas = createCanvas(videoWidth, videoHeight);
+      const watermarkCtx = watermarkCanvas.getContext('2d');
+      const tempWatermarkPath = path.join(__dirname, 'temp', `${previewId}_watermark.png`);
 
-    res.json({
-      success: true,
-      previewId: previewId,
-      previewUrl: `https://adkar.zeabur.app/previews/${previewId}.mp4`,
-      duration: previewDuration
-    });
-    
+      const brandText = 'Made on SakinahTime.com';
+      const watermarkPadding = Math.floor(videoWidth * 0.03);
+      const brandFontSize = Math.max(18, Math.floor(videoWidth * 0.015));
+      const infoFontSize = Math.max(22, Math.floor(videoWidth * 0.02));
+
+      const surahName = quranData.data.surahs[surahNum - 1].englishName;
+      const surahWithVerse = endVerse > startVerse ?
+          `${surahName}, Verses ${startVerse}-${endVerse}` :
+          `${surahName}, Verse ${startVerse}`;
+
+      watermarkCtx.font = `600 ${brandFontSize}px "Inter", "Lato", sans-serif`;
+      watermarkCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      watermarkCtx.textAlign = 'right';
+      watermarkCtx.textBaseline = 'bottom';
+      watermarkCtx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+      watermarkCtx.shadowBlur = 8;
+      watermarkCtx.shadowOffsetY = 2;
+      watermarkCtx.shadowOffsetX = 0;
+      watermarkCtx.fillText(brandText, videoWidth - watermarkPadding, videoHeight - watermarkPadding);
+
+      watermarkCtx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+      watermarkCtx.shadowBlur = 6;
+      watermarkCtx.font = `400 ${infoFontSize}px "Inter", "Lato", sans-serif`;
+      watermarkCtx.textAlign = 'left';
+      watermarkCtx.textBaseline = 'top';
+      watermarkCtx.fillText(surahWithVerse, watermarkPadding, watermarkPadding);
+
+      fs.writeFileSync(tempWatermarkPath, watermarkCanvas.toBuffer('image/png'));
+
+      // --- 6. Generate Video with FFmpeg ---
+      const command = ffmpeg()
+          .input(path.join(__dirname, 'videos', backgroundFilename))
+          .inputOptions(['-stream_loop', '-1', '-t', previewDuration.toString()])
+          .input(tempUnifiedOverlayPath)
+          .input(tempArabicTextPath)
+          .input(tempTranslationTextPath)
+          .input(tempWatermarkPath)
+          .complexFilter([
+              `[0:v]scale=${videoWidth}:${videoHeight}[bg]`,
+              `[bg][1:v]overlay=0:0[bg_overlay]`,
+              `[bg_overlay][2:v]overlay=(W-w)/2:${arabicTopPosition}[with_arabic]`,
+              `[with_arabic][3:v]overlay=(W-w)/2:${translationTopPosition}[with_translation]`,
+              `[with_translation][4:v]overlay=0:0[final]`
+          ])
+          .outputOptions(['-map', '[final]', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an'])
+          .output(path.join(__dirname, 'previews', `${previewId}.mp4`));
+
+      await new Promise((resolve, reject) => {
+          command.on('end', resolve).on('error', reject).run();
+      });
+
+      // --- 7. Cleanup and Respond ---
+      fs.unlinkSync(tempArabicTextPath);
+      fs.unlinkSync(tempTranslationTextPath);
+      fs.unlinkSync(tempUnifiedOverlayPath);
+      fs.unlinkSync(tempWatermarkPath);
+
+      res.json({
+          success: true,
+          previewUrl: `/previews/${previewId}.mp4` // Use a relative URL for flexibility
+      });
+
   } catch (error) {
-    console.error('Preview generation error:', error);
-    res.status(500).json({ error: 'Failed to generate preview' });
+      console.error('Preview generation error:', error);
+      res.status(500).json({ error: 'Failed to generate preview' });
   }
 });
-
 // Get available video backgrounds only
 app.get('/api/backgrounds', (req, res) => {
   const videoDir = path.join(__dirname, 'videos');
@@ -814,7 +391,7 @@ app.get('/api/backgrounds', (req, res) => {
       type: 'video',
       filename: f,
       displayName: f.replace(/\.[^.]+$/, '').replace(/_/g, ' '),
-      thumbnailUrl: `https://adkar.zeabur.app/api/thumbnail/${f}`
+      thumbnailUrl: `/api/thumbnail/${f}`
     }));
   }
 
@@ -1025,24 +602,22 @@ app.post('/api/generate-video', upload.single('background'), async (req, res) =>
     for (let i = 0; i < verses.length; i++) {
       let verseText = verses[i].text;
       
-      // Apply Unicode normalization to each verse
+      // Apply enhanced Unicode normalization to each verse
       verseText = verseText.normalize('NFC');
       
-      // Fix specific Arabic character issues - enhanced for diacritics
+      // Enhanced character replacements for better rendering
       verseText = verseText
-        .replace(/\u0621\u064E\u0627/g, '\u0623') // ء َ ا → أ (exact pattern from debugging)
-        .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0627/g, '\u0623') // hamza + any diacritics + alif → hamza on alif
-        .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0625/g, '\u0625') // hamza + any diacritics + hamza-under-alif
-        .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0622/g, '\u0622') // hamza + any diacritics + alif-madda
-        .replace(/ءا/g, 'أ')
-        .replace(/\u0621\u0627/g, '\u0623')
-        .replace(/\u0621\u0623/g, '\u0623')
-        .replace(/\u0621\u0625/g, '\u0625')
-        .replace(/\u0621\u0622/g, '\u0622')
-        .replace(/ٱلْءَاخِرَةِ/g, 'الْآخِرَةِ') // Fix "الآخرة" rendering issue
-        .replace(/ءَاخِرَةِ/g, 'آخِرَةِ') // Alternative pattern for "الآخرة"
-        .replace(/وَبِٱلْءَاخِرَةِ/g, 'وَبِالْآخِرَةِ') // Fix "وبالآخرة" specific issue
-        .replace(/بِٱلْءَاخِرَةِ/g, 'بِالْآخِرَةِ') // Fix "بالآخرة" pattern
+        .replace(/ٱلْءَاخِرَةِ/g, 'الْآخِرَةِ') // Fix for "الآخرة"
+        .replace(/وَبِٱلْءَاخِرَةِ/g, 'وَبِالْآخِرَةِ') // Fix for "وبالآخرة"
+        .replace(/بِٱلْءَاخِرَةِ/g, 'بِالْآخِرَةِ') // Fix for "بالآخرة"
+        .replace(/ءَا/g, 'آ') // Hamza followed by Alif -> Alif Madda
+        .replace(/ءُا/g, 'ؤا') // Hamza with damma followed by Alif
+        .replace(/ءِا/g, 'ئا') // Hamza with kasra followed by Alif
+        .replace(/\u0621\u0627/g, '\u0623') // Standalone Hamza + Alif -> Hamza on Alif
+        .replace(/\u0621\u064E\u0627/g, '\u0623') // Hamza + Fatha + Alif -> Hamza on Alif
+        .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0627/g, '\u0623') // Hamza + any diacritics + Alif -> Hamza on Alif
+        .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0625/g, '\u0625') // Hamza + diacritics + Hamza-under-Alif
+        .replace(/\u0621[\u064E\u064F\u0650\u0652]*\u0622/g, '\u0622') // Hamza + diacritics + Alif-Madda
         .replace(/ٱلْءَ/g, 'الْآ'); // General fix for hamza-alif in definite articles
       
       verses[i].processedText = verseText;
@@ -1332,10 +907,6 @@ app.post('/api/generate-video', upload.single('background'), async (req, res) =>
         videoWidth = 1080;
         videoHeight = 1920;
         break;
-      case 'square':
-        videoWidth = 1080;
-        videoHeight = 1080;
-        break;
       case 'landscape':
       default:
         videoWidth = 1920;
@@ -1452,69 +1023,8 @@ app.post('/api/generate-video', upload.single('background'), async (req, res) =>
     console.log('Font mapping found:', !!fontMapping[requestedFont]);
     console.log('Will try custom font:', selectedFont);
     
-    // Test different possible font names for Hafs and find the working one at actual size
-    if (requestedFont === 'Uthmanic Hafs') {
-      console.log('🔍 Testing Hafs font variations at actual size...');
-      const testCanvas = createCanvas(100, 50);
-      const testCtx = testCanvas.getContext('2d');
-      const testText = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ';
-      
-      // Get Arial baseline at actual font size
-      testCtx.font = `${baseFontSize}px "Arial"`;
-      const arialBaseline = testCtx.measureText(testText).width;
-      console.log(`Arial baseline at ${baseFontSize}px: ${arialBaseline}px`);
-      
-      const possibleNames = [
-        'KFGQPC HAFS Uthmanic Script',
-        'UthmanicHafs1Ver18',
-        'Uthmanic Hafs',
-        'KFGQPC Hafs Uthmanic Script',
-        'Traditional Arabic',
-        // Try the actual Windows font names
-        'KFGQPC Uthmanic Script HAFS',
-        'UthmanicHafs1 Ver18',
-        'Uthmanic Hafs Ver18'
-      ];
-      
-      let detectedWorkingFont = null;
-      possibleNames.forEach(name => {
-        try {
-          testCtx.font = `${baseFontSize}px "${name}"`;
-          const width = testCtx.measureText(testText).width;
-          const diff = Math.abs(width - arialBaseline);
-          console.log(`Font "${name}" at ${baseFontSize}px: width=${width}px, diff=${diff}px`);
-          
-          if (diff > 10 && !detectedWorkingFont) { // Use higher threshold for larger fonts
-            detectedWorkingFont = name;
-            console.log(`✓ Detected working Hafs font: ${name}`);
-          }
-        } catch (e) {
-          console.log(`Font "${name}": failed - ${e.message}`);
-        }
-      });
-      
-      // Update the font mapping if we found a working font
-      if (detectedWorkingFont && detectedWorkingFont !== selectedFont) {
-        console.log(`🔄 Updating font mapping: "${selectedFont}" → "${detectedWorkingFont}"`);
-        fontMapping['Uthmanic Hafs'] = detectedWorkingFont;
-        selectedFont = detectedWorkingFont;
-      } else if (!detectedWorkingFont && requestedFont === 'Uthmanic Hafs') {
-        // If no Hafs font works, try system Arabic fonts
-        console.log('🔄 No Hafs font working, trying system Arabic fonts...');
-        const systemArabicFonts = ['Traditional Arabic', 'Arabic Typesetting', 'Tahoma'];
-        for (const sysFont of systemArabicFonts) {
-          testCtx.font = `${baseFontSize}px "${sysFont}"`;
-          const sysWidth = testCtx.measureText(testText).width;
-          const sysDiff = Math.abs(sysWidth - arialBaseline);
-          console.log(`System font "${sysFont}" at ${baseFontSize}px: width=${sysWidth}px, diff=${sysDiff}px`);
-          if (sysDiff > 5) {
-            selectedFont = sysFont;
-            console.log(`✓ Using system Arabic font: ${sysFont}`);
-            break;
-          }
-        }
-      }
-    }
+    // Use the font mapping directly without testing - trust node-canvas registration
+    console.log(`✅ Using mapped font: ${selectedFont} (from ${requestedFont})`)
     
     // Create individual text overlays for each verse
     const verseOverlays = [];
@@ -1677,53 +1187,58 @@ app.post('/api/generate-video', upload.single('background'), async (req, res) =>
     
     console.log(`🎬 Created ${verseOverlays.length} verse overlays for sequential display`);
     
-    // Create watermark overlay that stays throughout the video
-    console.log('🏷️ Creating watermark overlay');
-    const watermarkCanvas = createCanvas(videoWidth, videoHeight);
-    const watermarkCtx = watermarkCanvas.getContext('2d');
-    
-    // Set watermark properties - prominent top placement with better sizing (responsive)
-    const websiteFontSize = Math.max(36, Math.floor(videoWidth * 0.045)); // Much larger and responsive (4.5% of width)
-    const surahFontSize = Math.floor(websiteFontSize * 0.8); // 80% of website font size
-    const websiteY = Math.floor(videoHeight * 0.05); // 5% from top
-    const surahY = websiteY + websiteFontSize + 10; // Below website text with 10px gap
-    
-    // Get surah name for watermark
-    const watermarkQuranData = JSON.parse(fs.readFileSync('quran-uthmani.json', 'utf8'));
-    const surahName = watermarkQuranData.data.surahs[surah - 1].englishName;
-    const watermarkStartVerse = parseInt(ayah);
-    const watermarkEndVerse = ayahTo ? parseInt(ayahTo) : watermarkStartVerse;
-    const surahWithVerse = watermarkEndVerse > watermarkStartVerse ? 
-      `${surahName} ${watermarkStartVerse}-${watermarkEndVerse}` : 
-      `${surahName} ${watermarkStartVerse}`;
-    
-    // Clear background (transparent)
-    watermarkCtx.clearRect(0, 0, videoWidth, videoHeight);
-    
-    // Draw website watermark
-    watermarkCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-    watermarkCtx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-    watermarkCtx.lineWidth = 2;
-    watermarkCtx.textAlign = 'center';
-    watermarkCtx.textBaseline = 'top';
-    
-    // Website text
-    watermarkCtx.font = `900 ${websiteFontSize}px "Impact", "Arial Black", sans-serif`;
-    watermarkCtx.lineWidth = 4;
-    watermarkCtx.strokeText('I made this on SakinahTimes.com', videoWidth / 2, websiteY);
-    watermarkCtx.fillText('I made this on SakinahTimes.com', videoWidth / 2, websiteY);
-    
-    // Surah name and verse
-    watermarkCtx.lineWidth = 3;
-    watermarkCtx.font = `bold ${surahFontSize}px "Impact", "Arial Black", sans-serif`;
-    watermarkCtx.strokeText(surahWithVerse, videoWidth / 2, surahY);
-    watermarkCtx.fillText(surahWithVerse, videoWidth / 2, surahY);
-    
-    const tempWatermarkPath = path.join(__dirname, 'temp', `${videoId}_watermark.png`);
-    const watermarkBuffer = watermarkCanvas.toBuffer('image/png');
-    fs.writeFileSync(tempWatermarkPath, watermarkBuffer);
-    
-    console.log('✅ Watermark overlay created');
+    // --- ✨ Modern & Professional Watermark ---
+
+console.log('🏷️ Creating modern watermark overlay');
+const watermarkCanvas = createCanvas(videoWidth, videoHeight);
+const watermarkCtx = watermarkCanvas.getContext('2d');
+
+// 1. Define styling constants for easy adjustments
+const brandText = 'Made on SakinahTime.com';
+const padding = Math.floor(videoWidth * 0.03); // 3% padding from the edge
+const brandFontSize = Math.max(18, Math.floor(videoWidth * 0.015)); // Smaller, subtle size for the brand
+const infoFontSize = Math.max(22, Math.floor(videoWidth * 0.02)); // A clear, readable size for the verse info
+
+// 2. Get the verse information text
+const watermarkQuranData = JSON.parse(fs.readFileSync('quran-uthmani.json', 'utf8'));
+const surahName = watermarkQuranData.data.surahs[surah - 1].englishName;
+const watermarkStartVerse = parseInt(ayah);
+const watermarkEndVerse = ayahTo ? parseInt(ayahTo) : watermarkStartVerse;
+const surahWithVerse = watermarkEndVerse > watermarkStartVerse ?
+  `${surahName}, Verses ${watermarkStartVerse}-${watermarkEndVerse}` : // For a range, e.g., "Al-Baqarah, Verses 2-5"
+  `${surahName}, Verse ${watermarkStartVerse}`;                  // For a single verse, e.g., "Al-Fatihah, Verse 1"
+
+// 3. Draw the main brand watermark in the bottom-right
+watermarkCtx.font = `600 ${brandFontSize}px "Inter", "Lato", sans-serif`; // Use a clean, semi-bold font
+watermarkCtx.fillStyle = 'rgba(255, 255, 255, 0.85)'; // Slightly transparent white
+watermarkCtx.textAlign = 'right';
+watermarkCtx.textBaseline = 'bottom';
+
+// Add a soft drop shadow for legibility
+watermarkCtx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+watermarkCtx.shadowBlur = 8;
+watermarkCtx.shadowOffsetY = 2;
+watermarkCtx.shadowOffsetX = 0;
+
+watermarkCtx.fillText(brandText, videoWidth - padding, videoHeight - padding);
+
+// 4. Draw the informational Surah/Verse name in the top-left
+// Reset shadow for a different, more subtle style for this text
+watermarkCtx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+watermarkCtx.shadowBlur = 6;
+
+watermarkCtx.font = `400 ${infoFontSize}px "Inter", "Lato", sans-serif`; // Use a regular weight
+watermarkCtx.textAlign = 'left';
+watermarkCtx.textBaseline = 'top';
+
+watermarkCtx.fillText(surahWithVerse, padding, padding);
+
+// 5. Save the generated watermark image
+const tempWatermarkPath = path.join(__dirname, 'temp', `${videoId}_watermark.png`);
+const watermarkBuffer = watermarkCanvas.toBuffer('image/png');
+fs.writeFileSync(tempWatermarkPath, watermarkBuffer);
+
+console.log('✅ Modern watermark overlay created');
     
     // All text overlays are now created individually for each verse
     // Skip to video generation with sequential overlays
