@@ -371,7 +371,7 @@ app.post('/api/preview-video', async (req, res) => {
 
       res.json({
           success: true,
-          previewUrl: `/previews/${previewId}.mp4` // Use a relative URL for flexibility
+          previewUrl: `/api/previews/${previewId}.mp4` // Use a relative URL for flexibility
       });
 
   } catch (error) {
