@@ -273,7 +273,9 @@ app.post('/api/preview-video', async (req, res) => {
           const y = (index * arabicFontSize * 1.3) + (arabicFontSize * 1.3 / 2);
           arabicCtx.fillText(line, videoWidth / 2, y);
       });
+      console.log('💾 Saving Arabic text image...');
       fs.writeFileSync(tempArabicTextPath, arabicCanvas.toBuffer('image/png'));
+      console.log('✅ Arabic text image saved');
 
       const tempTranslationTextPath = path.join(__dirname, 'temp', `${previewId}_translation.png`);
       const translationCanvas = createCanvas(videoWidth, translationBlockHeight);
@@ -286,7 +288,9 @@ app.post('/api/preview-video', async (req, res) => {
           const y = (index * translationFontSize * 1.3) + (translationFontSize * 1.3 / 2);
           translationCtx.fillText(line, videoWidth / 2, y);
       });
+      console.log('💾 Saving translation text image...');
       fs.writeFileSync(tempTranslationTextPath, translationCanvas.toBuffer('image/png'));
+      console.log('✅ Translation text image saved');
       
       // --- 5. Calculate Final Positions & Create Overlays ---
       const textGap = Math.floor(videoHeight * 0.03);
@@ -308,7 +312,9 @@ app.post('/api/preview-video', async (req, res) => {
       unifiedOverlayCtx.roundRect(overlayX, overlayY, overlayWidth, overlayHeight, 25);
       unifiedOverlayCtx.fill();
       const tempUnifiedOverlayPath = path.join(__dirname, 'temp', `${previewId}_overlay.png`);
+      console.log('💾 Saving unified overlay image...');
       fs.writeFileSync(tempUnifiedOverlayPath, unifiedOverlayCanvas.toBuffer('image/png'));
+      console.log('✅ Unified overlay image saved');
       
       // --- 5a. Create Modern Watermark (RESTORED) ---
       const watermarkCanvas = createCanvas(videoWidth, videoHeight);
@@ -342,11 +348,20 @@ app.post('/api/preview-video', async (req, res) => {
       watermarkCtx.textBaseline = 'top';
       watermarkCtx.fillText(surahWithVerse, watermarkPadding, watermarkPadding);
 
+      console.log('💾 Saving watermark image...');
       fs.writeFileSync(tempWatermarkPath, watermarkCanvas.toBuffer('image/png'));
+      console.log('✅ Watermark image saved');
 
-      // --- 6. Generate Video with FFmpeg ---
+      // --- 6. Prepare Background and Generate Video with FFmpeg ---
+      const backgroundPath = path.join(__dirname, 'videos', backgroundFilename);
+      
+      // Validate background file exists
+      if (!fs.existsSync(backgroundPath)) {
+          throw new Error(`Background video not found: ${backgroundPath}`);
+      }
+
       const command = ffmpeg()
-          .input(path.join(__dirname, 'videos', backgroundFilename))
+          .input(backgroundPath)
           .inputOptions(['-stream_loop', '-1', '-t', previewDuration.toString()])
           .input(tempUnifiedOverlayPath)
           .input(tempArabicTextPath)
@@ -365,8 +380,39 @@ app.post('/api/preview-video', async (req, res) => {
       // Ensure previews directory exists
       fs.ensureDirSync(path.join(__dirname, 'previews'));
 
+      console.log('🎬 Starting FFmpeg preview generation...');
+      console.log('FFmpeg command inputs:');
+      console.log('- Background:', backgroundPath);
+      console.log('- Arabic text:', tempArabicTextPath);
+      console.log('- Translation text:', tempTranslationTextPath);
+      console.log('- Overlay:', tempUnifiedOverlayPath);
+      console.log('- Watermark:', tempWatermarkPath);
+      console.log('- Output:', path.join(__dirname, 'previews', `${previewId}.mp4`));
+
       await new Promise((resolve, reject) => {
-          command.on('end', resolve).on('error', reject).run();
+          const timeout = setTimeout(() => {
+              console.error('⏰ FFmpeg timeout after 30 seconds');
+              reject(new Error('FFmpeg timeout after 30 seconds'));
+          }, 30000); // 30 second timeout
+
+          command
+              .on('start', (commandLine) => {
+                  console.log('🚀 FFmpeg started with command:', commandLine);
+              })
+              .on('progress', (progress) => {
+                  console.log('📊 FFmpeg progress:', progress.percent ? `${progress.percent.toFixed(1)}%` : 'processing...');
+              })
+              .on('end', () => {
+                  clearTimeout(timeout);
+                  console.log('✅ FFmpeg preview generation completed successfully');
+                  resolve();
+              })
+              .on('error', (err) => {
+                  clearTimeout(timeout);
+                  console.error('❌ FFmpeg error:', err);
+                  reject(err);
+              })
+              .run();
       });
 
       // --- 7. Cleanup and Respond ---
@@ -377,7 +423,7 @@ app.post('/api/preview-video', async (req, res) => {
 
       res.json({
           success: true,
-          previewUrl: `/api/previews/${previewId}.mp4` // Use a relative URL for flexibility
+          previewUrl: `${req.protocol}://${req.get('host')}/api/previews/${previewId}.mp4`
       });
 
   } catch (error) {
@@ -449,9 +495,20 @@ app.get('/api/previews/:filename', (req, res) => {
   const filename = req.params.filename;
   const previewPath = path.join(__dirname, 'previews', filename);
   
+  console.log(`📹 Preview video requested: ${filename}`);
+  console.log(`📁 Looking for file at: ${previewPath}`);
+  console.log(`📋 File exists: ${fs.existsSync(previewPath)}`);
+  
   if (fs.existsSync(previewPath)) {
+    // Set proper headers for video serving
+    res.set({
+      'Content-Type': 'video/mp4',
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache'
+    });
     res.sendFile(previewPath);
   } else {
+    console.log(`❌ Preview not found: ${previewPath}`);
     res.status(404).send('Preview not found');
   }
 });
