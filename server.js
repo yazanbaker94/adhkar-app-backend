@@ -69,6 +69,7 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static('.'));
+app.use('/previews', express.static(path.join(__dirname, 'previews')));
 
 // Add request logging
 app.use((req, res, next) => {
@@ -193,6 +194,9 @@ app.post('/api/preview-video', async (req, res) => {
       const maxTextWidth = Math.floor(videoWidth * 0.85);
       const textColorValue = textColor || '#ffffff';
       const baseFontSize = fontSize || Math.floor(videoHeight * 0.045);
+
+      // Ensure temp directory exists
+      fs.ensureDirSync(path.join(__dirname, 'temp'));
 
       const fontMapping = {
           'Al Mushaf': 'Al Majeed Quranic Font',
@@ -358,6 +362,9 @@ app.post('/api/preview-video', async (req, res) => {
           .outputOptions(['-map', '[final]', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-an'])
           .output(path.join(__dirname, 'previews', `${previewId}.mp4`));
 
+      // Ensure previews directory exists
+      fs.ensureDirSync(path.join(__dirname, 'previews'));
+
       await new Promise((resolve, reject) => {
           command.on('end', resolve).on('error', reject).run();
       });
@@ -370,7 +377,7 @@ app.post('/api/preview-video', async (req, res) => {
 
       res.json({
           success: true,
-          previewUrl: `/previews/${previewId}.mp4` // Use a relative URL for flexibility
+          previewUrl: `/api/previews/${previewId}.mp4` // Use a relative URL for flexibility
       });
 
   } catch (error) {
@@ -435,6 +442,18 @@ app.get('/api/thumbnail/:filename', (req, res) => {
       console.error('Error generating thumbnail:', err);
       res.status(500).send('Error generating thumbnail');
     });
+});
+
+// Serve preview videos
+app.get('/api/previews/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const previewPath = path.join(__dirname, 'previews', filename);
+  
+  if (fs.existsSync(previewPath)) {
+    res.sendFile(previewPath);
+  } else {
+    res.status(404).send('Preview not found');
+  }
 });
 
 // Get verse audio range
